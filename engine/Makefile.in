@@ -41,7 +41,7 @@ INCLUDES += -I.
 
 ifeq ($(os),OSX)
 	BINDIR ?= MacOS
-	R_HOME ?= $(SRCDIR)/../../../Frameworks/R.framework/Versions/3.6/Resources
+	R_HOME ?= $(SRCDIR)/../../../Frameworks/R.framework/Versions/Current/Resources
 	BASE_MODULE_PATH ?= $(SRCDIR)/../../modules/base/R
 	LDFLAGS +=	-L$(SRCDIR)/../../../Frameworks \
 				-L$(R_HOME)/lib \
@@ -50,7 +50,7 @@ ifeq ($(os),OSX)
 				-lboost_filesystem \
 				-lboost_system \
 				-framework Foundation
-	CXXFLAGS += -mmacosx-version-min=10.11
+	CXXFLAGS += -mmacosx-version-min=10.13
 else
 ifeq ($(os),Linux)
 	BINDIR ?= bin
@@ -71,14 +71,16 @@ else
 				-L$(SRCDIR)/../../lib/libgcc \
 				-L$(R_HOME)/bin/x64 \
 				-L$(BASE_MODULE_PATH)/RInside/lib/x64 \
-				-lboost_filesystem-mgw49-mt-1_60 \
-				-lboost_system-mgw49-mt-1_60
+				-lboost_filesystem-mgw8-mt-x64-1_74 \
+				-lboost_system-mgw8-mt-x64-1_74 \
+				-lboost_nowide-mgw8-mt-x64-1_74
 
 	# _WIN32_WINNT is for SHGetKnownFolderPath
 
 	CXXFLAGS +=	-DUNICODE \
 				"-D_WIN32_WINNT=_WIN32_WINNT_VISTA" \
-				"-DWIN32_LEAN_AND_MEAN"
+				"-DWIN32_LEAN_AND_MEAN" \
+				"-fpermissive"
 endif
 endif
 

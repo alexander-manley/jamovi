@@ -4,8 +4,10 @@ import math
 from numbers import Number as num
 import statistics as stats
 
+from numpy import quantile
 from scipy.stats import boxcox
 # numpy, scipy return numpy.float64's, so need to convert back to float
+from scipy.stats import rankdata
 
 from jamovi.core import DataType
 from jamovi.core import MeasureType
@@ -30,12 +32,15 @@ def MAX(index, arg0: float, *args: float):
 
 
 @row_wise
-def MEAN(index, arg0: float, *args: float, ignore_missing: int = 0):
+def MEAN(index, arg0: float, *args: float, ignore_missing: int = 0, min_valid: int = 0):
     values = [ arg0 ]
     values.extend(args)
-    if ignore_missing != 0:
+    if min_valid > 0 or ignore_missing != 0:
         values = list(filter(lambda x: not is_missing(x), values))
-    return stats.mean(values)
+    if len(values) < min_valid:
+        return NaN
+    else:
+        return stats.mean(values)
 
 
 @row_wise
@@ -56,11 +61,13 @@ def STDEV(index, arg0: float, *args: float, ignore_missing: int = 0):
 
 
 @row_wise
-def SUM(index, arg0: float, *args: float, ignore_missing: int = 0):
+def SUM(index, arg0: float, *args: float, ignore_missing: int = 0, min_valid: int = 0):
     values = [ arg0 ]
     values.extend(args)
-    if ignore_missing != 0:
+    if min_valid > 0 or ignore_missing != 0:
         values = list(filter(lambda x: not is_missing(x), values))
+    if len(values) < min_valid:
+        return NaN
     return math.fsum(values)
 
 
@@ -149,6 +156,29 @@ def NOTROW(index, arg0, *args):
     elif (index + 1) in args:
         return 0
     return 1
+
+
+@column_wise
+def Q1(values: float):
+    values = filter(lambda x: not math.isnan(x), values)
+    return float(quantile(list(values), 0.25))
+
+
+@column_wise
+def Q3(values: float):
+    values = filter(lambda x: not math.isnan(x), values)
+    return float(quantile(list(values), 0.75))
+
+
+@row_wise
+def IIQR(index, value: float, q1: float, q3: float):
+    if value < q1:
+        value = (value - q1) / (q3 - q1)
+    elif value > q3:
+        value = (value - q3) / (q3 - q1)
+    else:
+        value = 0
+    return value
 
 
 @column_wise
@@ -367,6 +397,16 @@ def CONTAINS(index, item1: str, in1: str, *args: str, in2: str = '', in3: str = 
                 return 1
     else:
         return 0
+
+
+@column_wise
+@returns(DataType.DECIMAL, MeasureType.CONTINUOUS)
+def RANK(var: float):
+    ranks = rankdata(list(var)).tolist()
+    for i, v in enumerate(var):
+        if math.isnan(v):
+            ranks[i] = NaN
+    return ranks
 
 
 _RECODE_NOM = RECODE

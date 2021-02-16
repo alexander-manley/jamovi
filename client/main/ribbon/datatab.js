@@ -1,8 +1,6 @@
 
 'use strict';
 
-const $ = require('jquery');
-
 const RibbonButton = require('./ribbonbutton');
 const RibbonSeparator = require('./ribbonseparator');
 const RibbonGroup = require('./ribbongroup');
@@ -45,6 +43,10 @@ const DataTab = function() {
                             new RibbonButton({ title: 'Insert', name: 'insertRecoded' }),
                             new RibbonButton({ title: 'Append', name: 'appendRecoded' })
                         ]}),
+                        /* new RibbonGroup({ title: 'Output Variable', orientation: 'horizontal', titlePosition: 'top', items: [
+                            new RibbonButton({ title: 'Insert', name: 'insertOutput' }),
+                            new RibbonButton({ title: 'Append', name: 'appendOutput' })
+                        ]})*/
                     ]}),
                     new RibbonButton({ title: 'Delete', name: 'delVar' }),
                 ]}),

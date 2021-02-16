@@ -3,11 +3,13 @@
 * {
     user-select: none ;
     -webkit-user-select: none;
-       -moz-user-select: none;
+    -moz-user-select: none;
 }
 
-input, [contenteditable] {
+input, [contenteditable], [contenteditable] * {
     user-select: initial ;
+    -webkit-user-select: initial;
+    -moz-user-select: initial;
 }
 
 html, body {
@@ -30,6 +32,12 @@ body {
 
 h1 {
     font: 400 2.25rem/1.1 "Segoe UI", "Open Sans", sans-serif, serif;
+}
+
+.sub-title {
+    font-size: 60%;
+    color: #9a9a9a;
+    margin-top: 5px;
 }
 
 .jmv-options-block {

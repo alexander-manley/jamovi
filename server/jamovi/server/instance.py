@@ -52,7 +52,7 @@ from .utils import is_url
 from .utils import latexify
 
 
-log = logging.getLogger('jamovi')
+log = logging.getLogger(__name__)
 
 
 # until we deploy the windows updater and are happy with it,
@@ -90,6 +90,7 @@ class Instance:
         self._inactive_clean = True
 
         self._data.analyses.add_results_changed_listener(self._on_results)
+        self._data.analyses.add_output_received_listener(self._on_output_received)
 
         settings = Settings.retrieve()
         settings.sync()
@@ -270,9 +271,140 @@ class Instance:
         if self._coms is not None:
             self._coms.send(analysis.results, self._instance_id, complete=analysis.complete)
 
+    def _on_output_received(self, outputs):
+
+        def gen_output_column_name(desired_name):
+            name = desired_name
+            next_number = 2
+            while True:
+                # create a unique name if necessary
+                for column in self._data:
+                    if name == column.name:  # not unique!
+                        name = f'{ desired_name } ({ next_number })'
+                        next_number += 1
+                        break
+                else:
+                    # it's unique, phew!
+                    break
+            return name
+
+        try:
+            response = None
+            analysis_id = outputs.analysis_id
+
+            for option_outputs in outputs.outputs:
+                option_name = option_outputs.option_name
+
+                columns_by_output_name = { }
+                to_delete = [ ]
+
+                for column in self._data:
+                    if (column.column_type is ColumnType.OUTPUT
+                            and column.output_analysis_id == analysis_id
+                            and column.output_option_name == option_name):
+                        columns_by_output_name[column.output_name] = column
+
+                new_names = list(map(lambda x: x.name, option_outputs.outputs))
+
+                # determine columns to delete
+
+                for column in list(columns_by_output_name.values()):  # make a copy so we can modify the original
+                    if column.output_name not in new_names:
+                        del columns_by_output_name[column.output_name]
+                        to_delete.append(column)
+
+                # add new columns
+
+                for output in option_outputs.outputs:
+
+                    desired_name = output.title
+
+                    if output.name not in columns_by_output_name.keys():
+
+                        name = gen_output_column_name(desired_name)
+
+                        column = self._data.insert_column(self._data.column_count, name)
+                        column.column_type = ColumnType.OUTPUT
+                        column.description = output.description
+                        column.output_analysis_id = analysis_id
+                        column.output_option_name = option_name
+                        column.output_name = output.name
+                        column.output_assigned_column_name = name
+                        column.output_desired_column_name = desired_name
+                    else:
+                        column = columns_by_output_name[output.name]
+                        if column.name == column.output_assigned_column_name:  # user hasn't changed the name
+                            if column.output_desired_column_name != desired_name:  # but analysis has changed the name
+                                name = gen_output_column_name(desired_name)
+                                column.name = name
+                                column.description = output.description
+                                column.output_assigned_column_name = name
+                                column.output_desired_column_name = desired_name
+
+                    if output.values is None:
+                        pass
+                    elif len(output.values) == 0:
+                        column.clear()
+                    elif isinstance(output.values[0], int):
+                        if len(output.levels) > 0:
+                            column.clear()
+                            column.change(data_type=DataType.INTEGER, measure_type=MeasureType.NOMINAL)
+                            for level in output.levels:
+                                column.append_level(level.value, level.label)
+                        else:
+                            column.change(data_type=DataType.INTEGER)
+                    elif isinstance(output.values[0], float):
+                        column.change(data_type=DataType.DECIMAL, measure_type=MeasureType.CONTINUOUS)
+                    else:
+                        # shouldn't get here
+                        continue
+
+                    if output.values:
+                        index = 0
+                        n_values = len(output.values)
+                        for row_no in range(column.row_count):
+                            if not column.is_row_filtered(row_no):
+                                if index < n_values:
+                                    value = output.values[index]
+                                    column.set_value(row_no, value)
+                                    index += 1
+                                else:
+                                    column.clear_at(row_no)
+                            else:
+                                column.clear_at(row_no)
+
+                        if column.data_type == DataType.DECIMAL:
+                            column.determine_dps()
+
+                    if response is None:
+                        response = jcoms.DataSetRR()
+
+                    column_pb = response.schema.columns.add()
+                    self._populate_column_schema(column, column_pb, True)
+
+                # delete columns
+
+                for column in to_delete:
+                    if response is None:
+                        response = jcoms.DataSetRR()
+
+                    self._data.delete_columns_by_id([column.id])
+                    column_pb = response.schema.columns.add()
+                    column_pb.id = column.id
+                    column_pb.action = jcoms.DataSetSchema.ColumnSchema.Action.Value('REMOVE')
+
+            if self._coms is not None and response is not None:
+                self._populate_schema_info(None, response)
+                self._coms.send(response, self._instance_id)
+
+        except Exception as e:
+            log.exception(e)
+
     def _on_fs_request(self, request):
         try:
             path = request.path
+            extensions = request.extensions
+
             abs_path = path  # used by exception reporting
 
             try:
@@ -403,6 +535,7 @@ class Instance:
 
                 for direntry in os.scandir(abs_path + '/'):  # add a / in case we get C:
 
+                    show = False
                     if fs.is_hidden(direntry.path):
                         show = False
                     elif direntry.is_dir():
@@ -413,7 +546,13 @@ class Instance:
                             show = True
                     else:
                         entry_type = FileEntry.Type.FILE
-                        show = formatio.is_supported(direntry.name)
+                        if len(extensions) == 0:
+                            show = True
+                        else:
+                            filename = os.path.basename(direntry.name)
+                            name, ext = os.path.splitext(filename)
+                            if ext != '' and ext[1:] in extensions:
+                                show = True
 
                     if show:
                         entry = FileEntry()
@@ -726,10 +865,43 @@ class Instance:
                     await integ_handler.process(self._data)
 
                 stream.set_result(result)
+
+                if self._data.analyses.count() == 0 or self._data.analyses._analyses[0].name != 'empty':
+                    annotation = self._data.analyses.create_annotation(0)
+                    annotation.results.index = 1
+                    annotation.results.title = 'Results'
+
+                i = 1
+                while i < self._data.analyses.count():
+                    analysis = self._data.analyses._analyses[i]
+
+                    if analysis.name == 'empty':
+                        log.info(f'Missing Analysis: { analysis.depends_on }')
+                        del self._data.analyses[analysis.id]
+                    else:
+                        annotation_index = i + 1
+                        if annotation_index == self._data.analyses.count():
+                            annotation = self._data.analyses.create_annotation(annotation_index)
+                            annotation.results.index = annotation_index + 1
+                            analysis.add_dependent(annotation)
+                        else:
+                            annotation = self._data.analyses._analyses[annotation_index]
+                            if annotation.name != 'empty' or annotation.depends_on != analysis.id:
+                                if annotation.name == 'empty':
+                                    log.info(f'Dependency miss-match: { annotation.depends_on }, { analysis.id }')
+                                    del self._data.analyses[annotation.id]
+                                else:
+                                    log.info(f'Missing Annotation: { analysis.id }')
+                                annotation = self._data.analyses.create_annotation(annotation_index)
+                                annotation.results.index = annotation_index + 1
+                                analysis.add_dependent(annotation)
+                        i = annotation_index + 1
+
             except Exception as e:
                 self._data.dataset = None
                 if self._mm:
                     self._mm.close()
+                    self._mm = None
                 stream.set_exception(e)
             else:
                 if path != '' and not is_temp:
@@ -1032,22 +1204,81 @@ class Instance:
                 analysis.rerun()
             return
 
-        if request.analysisId == 0:
-            log.error('Instance._on_analysis(): Analysis id of zero is not allowed')
-            self._coms.discard(request)
+        elif request.perform == jcoms.AnalysisRequest.Perform.Value('DELETE') and request.analysisId == 0:  # request to delete all analyses
+            # delete all analyses
+            self._data.analyses.remove_all()
+
+            header = self._data.analyses.create_annotation(0)
+            header.results.index = 1
+            header.results.title = 'Results'
+
+            # find all output columns
+            columns_to_delete = [ ]
+
+            for column in self._data:
+                if column.column_type == ColumnType.OUTPUT:
+                    columns_to_delete.append(column.id)
+
+            if columns_to_delete:
+                self._data.delete_columns_by_id(columns_to_delete)
+
+            # send responses
+            self._coms.send(request, self._instance_id, request)
+            self._coms.send(header.results, self._instance_id)
+
+            if columns_to_delete:
+                broadcast = jcoms.DataSetRR()
+                for id in columns_to_delete:
+                    column_pb = broadcast.schema.columns.add()
+                    column_pb.id = id
+                    column_pb.action = jcoms.DataSetSchema.ColumnSchema.Action.Value('REMOVE')
+                self._populate_schema_info(None, broadcast)
+                self._coms.send(broadcast, self._instance_id)
+
             return
 
-        analysis = self._data.analyses.get(request.analysisId)
+        analysis = None
+        if request.analysisId != 0:
+            analysis = self._data.analyses.get(request.analysisId)
 
         if analysis is not None:  # analysis already exists
             self._data.is_edited = True
             if request.perform == jcoms.AnalysisRequest.Perform.Value('DELETE'):
-                del self._data.analyses[request.analysisId]
+                analysis_to_delete = self._data.analyses[request.analysisId]
+                if analysis_to_delete.name != 'empty':
+                    # delete analyses
+                    for child in analysis_to_delete.dependents:
+                        del self._data.analyses[child.id]
+                    del self._data.analyses[request.analysisId]
+
+                    # delete all output columns
+                    columns_to_delete = [ ]
+
+                    for column in self._data:
+                        if column.output_analysis_id == request.analysisId:
+                            columns_to_delete.append(column.id)
+
+                    if columns_to_delete:
+                        self._data.delete_columns_by_id(columns_to_delete)
+
+                    # send responses
+                    self._coms.send(request, self._instance_id, request, True)
+
+                    if columns_to_delete:
+                        broadcast = jcoms.DataSetRR()
+                        for id in columns_to_delete:
+                            column_pb = broadcast.schema.columns.add()
+                            column_pb.id = id
+                            column_pb.action = jcoms.DataSetSchema.ColumnSchema.Action.Value('REMOVE')
+                        self._populate_schema_info(None, broadcast)
+                        self._coms.send(broadcast, self._instance_id)
+
+                else:
+                    analysis_to_delete.reset_options(request.revision)
+                    self._coms.send(analysis_to_delete.results, self._instance_id, request, True)
             else:
                 analysis.set_options(request.options, request.changed, request.revision, request.enabled)
-
-            self._coms.send(None, self._instance_id, request, True)
-
+                self._coms.send(None, self._instance_id, request, True)
         else:  # create analysis
             try:
                 duplicating = request.perform == jcoms.AnalysisRequest.Perform.Value('DUPLICATE')
@@ -1058,36 +1289,58 @@ class Instance:
                     dupliceeId = request.options.options[index].i
                     duplicee = self._data.analyses.get(dupliceeId)
 
-                analysis = self._data.analyses.create(
-                    request.analysisId,
-                    request.name,
-                    request.ns,
-                    request.options,
-                    None if request.index == 0 else request.index - 1)
+                if self._data.analyses.has_header_annotation() is False:
+                    header = self._data.analyses.create_annotation(0)
+                    header.results.index = 1
+                    header.results.title = 'Results'
+                    if request.name == 'empty':
+                        self._coms.send(header.results, self._instance_id, request, complete=True)
+                    else:
+                        self._coms.send(header.results, self._instance_id, complete=True)
 
-                self._data.is_edited = True
+                    # increment the index of the request, so it's placed after the header
+                    request.index += 1
 
-                if duplicating:
-                    analysis.copy_from(duplicee)
-                    self._coms.send(analysis.results, self._instance_id, request, True)
-                else:
-                    analysis.run()
-                    response = jcoms.AnalysisResponse()
-                    response.name = request.name
-                    response.ns = request.ns
-                    response.analysisId = request.analysisId
-                    response.options.ParseFromString(analysis.options.as_bytes())
-                    response.index = request.index
-                    response.status = jcoms.AnalysisStatus.Value('ANALYSIS_NONE')
+                if request.name != 'empty':
 
-                    self._coms.send(response, self._instance_id, request, True)
+                    if request.analysisId % 2 != 0:
+                        raise Exception('Analyses created by the client must have an even id')
+
+                    analysis = self._data.analyses.create(
+                        request.analysisId,
+                        request.name,
+                        request.ns,
+                        request.options,
+                        None if request.index == 0 else request.index - 1)
+
+                    self._data.is_edited = True
+
+                    if duplicating:
+                        analysis.copy_from(duplicee)
+                        analysis.results.index = request.index
+                        self._coms.send(analysis.results, self._instance_id, request, True)
+                    else:
+                        response = jcoms.AnalysisResponse()
+                        response.name = request.name
+                        response.ns = request.ns
+                        response.analysisId = analysis.id
+                        response.options.ParseFromString(analysis.options.as_bytes())
+                        response.index = request.index
+                        response.status = jcoms.AnalysisStatus.Value('ANALYSIS_NONE')
+                        self._coms.send(response, self._instance_id, request, True)
+                        analysis.run()
+                    child_index = request.index + 1
+                    for child in analysis.dependents:
+                        child.results.index = child_index
+                        child_index += 1
+                        self._coms.send(child.results, self._instance_id, complete=True)
 
             except OSError as e:
 
                 log.error('Could not create analysis: ' + str(e))
 
                 response = jcoms.AnalysisResponse()
-                response.analysisId = request.analysisId
+                response.analysisId = analysis.id
                 response.status = jcoms.AnalysisStatus.Value('ANALYSIS_ERROR')
                 response.error.message = 'Could not create analysis: ' + str(e)
 

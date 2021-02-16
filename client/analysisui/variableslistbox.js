@@ -35,7 +35,7 @@ const VariablesListBox = function(params) {
                     return props;
             }
         }
-        else if (optType === "Variable" || optType === "Variables" || optType === "Pair" || optType === "Pairs")
+        else if (optType === "Variable" || optType === "Variables" || optType === "Pair" || optType === "Pairs" || optType === 'Output' || optType === 'Outputs')
             return properties;
 
         return null;
@@ -72,7 +72,62 @@ const VariablesListBox = function(params) {
             this.checkScrollBars();
             this.$el.append(this.$icons);
         }
+
+        if (this.hasProperty('permitted')) {
+            let permitted = this.getPropertyValue('permitted');
+            if (permitted.includes('output')) {
+                this.$createButton = $(`<div class="variablelist-button-box"><div class="button"><span class="mif-plus"></span><div class="text">Add New Variable</div></div></div>`);
+                this.fillerCell.setContent(this.$createButton);
+                this.fillerCell.makeSticky({ bottom: '0px' });
+                this.$createButton = this.$createButton.find('.button');
+                let label = this.getPropertyValue('label');
+
+                this.$createButton.on('click', () => {
+                    let desiredName = label;
+                    if (this.isSingleItem === false)
+                        desiredName = desiredName + ' ' + (this.contentRowCount() + 1);
+
+                    let promise = this.requestAction('createColumn',  { columnType: 'output', name: desiredName}).then((value) => {
+                        if (this.isSingleItem)
+                            this.setValue(value);
+                        else {
+                            let list = this.getValue();
+                            if (list === null)
+                                list = [value];
+                            else {
+                                list = list.slice();
+                                list.push(value);
+                            }
+
+                            this.setValue(list);
+                        }
+                    });
+                });
+                let value = this.getValue();
+                if (this.isSingleItem && value !== null) {
+                    this.fillerCell.setVisibility(false);
+                    this.$createButton.css('display', 'none');
+                }
+            }
+        }
     };
+
+    this._override('onOptionValueChanged', (baseFunction, key, data) => {
+        if (baseFunction !== null)
+            baseFunction.call(this, key, data);
+
+        if (this.isSingleItem && this.$createButton) {
+            let value = this.getValue();
+            if (value === null) {
+                this.fillerCell.setVisibility(true);
+                this.$createButton.css('display', '');
+            }
+            else {
+                this.fillerCell.setVisibility(false);
+                this.$createButton.css('display', 'none');
+            }
+        }
+    });
 
 
     this.checkScrollBars = () => {

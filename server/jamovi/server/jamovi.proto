@@ -89,6 +89,9 @@ message AnalysisResponse {
     uint32 version = 14;
     int32 index = 15;
     repeated Reference references = 16;
+    int32 dependsOn = 17;
+    string title = 18;
+    bool hasTitle = 19;
 }
 
 message Reference {
@@ -219,6 +222,9 @@ message ResultsArray {
 
     LayoutType layout = 2;
     bool hideHeadingOnlyChild = 4;
+
+    bool hasHeader = 8;
+    ResultsElement header = 9;
 }
 
 message ResultsGroup {
@@ -229,6 +235,22 @@ message ResultsHtml {
     string content = 1;
     repeated string scripts = 2;
     repeated string stylesheets = 3;
+}
+
+message ResultsOutput {
+    string name = 1;
+    string title = 2;
+    string description = 3;
+    bool stale = 4;
+    bool incData = 5;
+    repeated VariableLevel levels = 6;
+    repeated int32 i = 7;
+    repeated double d = 8;
+}
+
+message ResultsOutputs {
+    repeated ResultsOutput outputs = 1;
+    repeated uint32 rowNums = 2;
 }
 
 message ResultsElement {
@@ -246,6 +268,7 @@ message ResultsElement {
         string preformatted = 10;
         string syntax = 11;
         ResultsHtml html = 12;
+        ResultsOutputs outputs = 13;
     }
 
     bytes state = 14;
@@ -318,6 +341,7 @@ message FSEntry {
 
 message FSRequest {
     string path = 1;
+    repeated string extensions = 2;
 }
 
 message FSResponse {
@@ -382,6 +406,13 @@ message SettingsRequest {
     repeated SettingValue settings = 4;
 }
 
+message Notification {
+    uint32 id = 1;
+    uint32 status = 2; // 0 = transient, 1 = dismiss, 2 = indefinite
+    string title = 3;
+    string message = 4;
+}
+
 message SettingsResponse {
     repeated DataSetEntry recents = 1;
     repeated DataSetEntry examples = 2;
@@ -420,6 +451,20 @@ enum ColumnType {
     COMPUTED = 2;
     RECODED = 3;
     FILTER = 4;
+    OUTPUT = 5;
+}
+
+message AnnotationSchema {
+
+    enum Action {
+        CREATE = 0;
+        UPDATE = 1;
+        REMOVE = 2;
+    }
+
+    int32 id = 1;
+    Action action = 2;
+    string data = 3;
 }
 
 message DataSetSchema {
@@ -492,8 +537,8 @@ message DataSetSchema {
         int32 colourIndex = 7;
         MeasureType measureType = 8;
         string suffix = 9;
-
     }
+
     repeated ColumnSchema columns = 1;
 
     uint32 rowCount = 5;

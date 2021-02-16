@@ -136,30 +136,59 @@ class ModuleAssetHandler(RequestHandler):
             self.write(content)
 
 
+class ModuleDescriptor(RequestHandler):
+
+    def get(self, module_name):
+        content = None
+        try:
+            try:
+                module_path = Modules.instance().get(module_name).path
+                defn_path = os.path.join(module_path, 'jamovi-full.yaml')
+                with open(defn_path, 'rb') as file:
+                    content = file.read()
+            except (KeyError, FileNotFoundError):
+                raise
+            except Exception as e:
+                log.exception(e)
+        except Exception as e:
+            self.set_status(404)
+            self.write('<h1>404</h1>')
+            self.write(str(e))
+        else:
+            self.set_header('Content-Type', 'text/yaml')
+            self.write(content)
+
+
 class AnalysisDescriptor(RequestHandler):
 
     def get(self, module_name, analysis_name, part):
         if part == '':
             part = 'js'
 
-        module_path = Modules.instance().get(module_name).path
-
-        if part == 'js':
-            analysis_path = os.path.join(module_path, 'ui', analysis_name.lower() + '.' + part)
-        else:
-            analysis_path = os.path.join(module_path, 'analyses', analysis_name.lower() + '.' + part)
-        analysis_path = os.path.realpath(analysis_path)
-
+        content = None
         try:
-            with open(analysis_path, 'rb') as file:
-                content = file.read()
-                self.set_header('Content-Type', 'text/plain')
-                self.write(content)
+            try:
+                module_path = Modules.instance().get(module_name).path
+
+                if part == 'js':
+                    analysis_path = os.path.join(module_path, 'ui', analysis_name.lower() + '.' + part)
+                else:
+                    analysis_path = os.path.join(module_path, 'analyses', analysis_name.lower() + '.' + part)
+
+                analysis_path = os.path.realpath(analysis_path)
+                with open(analysis_path, 'rb') as file:
+                    content = file.read()
+            except (KeyError, FileNotFoundError):
+                raise
+            except Exception as e:
+                log.exception(e)
         except Exception as e:
-            log.exception(e)
             self.set_status(404)
             self.write('<h1>404</h1>')
             self.write(str(e))
+        else:
+            self.set_header('Content-Type', 'text/plain')
+            self.write(content)
 
 
 class EntryHandler(RequestHandler):
@@ -339,8 +368,6 @@ class Server:
             self._spool = TemporaryDirectory()
             self._spool_dir = self._spool.name
 
-        conf.set('debug', debug)
-
         if stdin_slave:
             self._thread = threading.Thread(target=self._read_stdin)
             self._thread.daemon = True
@@ -460,7 +487,11 @@ class Server:
         await self._session.start()
 
         assets_path = os.path.join(client_path, 'assets')
-        no_cache_headers = { 'Cache-Control': 'private, no-cache, must-revalidate, max-age=0' }
+
+        if conf.get('devel', False):
+            cache_headers = { 'Cache-Control': 'private, no-cache, must-revalidate, max-age=0' }
+        else:
+            cache_headers = { 'Cache-Control': 'private, max-age=60' }
 
         self._main_app = tornado.web.Application([
             (r'/', EntryHandler, { 'session': self._session }),
@@ -473,6 +504,7 @@ class Server:
                 'path': coms_path,
                 'is_pkg_resource': True,
                 'mime_type': 'text/plain' }),
+            (r'/modules/([0-9a-zA-Z]+)', ModuleDescriptor),
             (r'/analyses/([0-9a-zA-Z]+)/([0-9a-zA-Z]+)/([.0-9a-zA-Z]+)', AnalysisDescriptor),
             (r'/analyses/([0-9a-zA-Z]+)/([0-9a-zA-Z]+)()', AnalysisDescriptor),
             (r'/utils/to-pdf', PDFConverter, { 'pdfservice': self }),
@@ -482,10 +514,10 @@ class Server:
             (r'/[a-f0-9-]+/()', StaticFileHandler, {
                 'path': client_path,
                 'default_filename': 'index.html',
-                'extra_headers': no_cache_headers }),
+                'extra_headers': cache_headers }),
             (r'/([-0-9a-z.]*)', StaticFileHandler, {
                 'path': client_path,
-                'extra_headers': no_cache_headers })
+                'extra_headers': cache_headers })
         ])
 
         analysisui_path = os.path.join(client_path, 'analysisui.html')
@@ -493,13 +525,13 @@ class Server:
         self._analysisui_app = tornado.web.Application([
             (r'/[-0-9a-f]+/', SingleFileHandler, {
                 'path': analysisui_path,
-                'extra_headers': no_cache_headers }),
+                'extra_headers': cache_headers }),
             (r'/(analysisui\.js)', StaticFileHandler, {
                 'path': client_path,
-                'extra_headers': no_cache_headers }),
+                'extra_headers': cache_headers }),
             (r'/(analysisui\.css)', StaticFileHandler, {
                 'path': client_path,
-                'extra_headers': no_cache_headers }),
+                'extra_headers': cache_headers }),
             (r'/assets/([-.0-9a-zA-Z]+)', StaticFileHandler, {
                 'path': assets_path }),
         ])
@@ -509,13 +541,13 @@ class Server:
         self._resultsview_app = tornado.web.Application([
             (r'/[-0-9a-z]+/[0-9]+/', SingleFileHandler, {
                 'path': resultsview_path,
-                'extra_headers': no_cache_headers }),
+                'extra_headers': cache_headers }),
             (r'/(resultsview\.js)', StaticFileHandler, {
                 'path': client_path,
-                'extra_headers': no_cache_headers }),
+                'extra_headers': cache_headers }),
             (r'/(resultsview\.css)', StaticFileHandler, {
                 'path': client_path,
-                'extra_headers': no_cache_headers }),
+                'extra_headers': cache_headers }),
             (r'/assets/([-.0-9a-zA-Z]+)', StaticFileHandler, {
                 'path': assets_path }),
             (r'/([-0-9a-z]+)/[0-9]+/res/(.+)', ResourceHandler, {

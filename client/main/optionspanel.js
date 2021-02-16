@@ -65,6 +65,13 @@ const AnalysisResources = function(analysis, $target, iframeUrl, instanceId) {
             this.trigger("hideOptions");
         },
 
+        requestAction: data => {
+            if (data.requestType === "createColumn") {
+                let column = this.dataSetModel.getFirstEmptyColumn();
+                return this.dataSetModel.changeColumn(column.id, data.requestData ).then(() => { return column.name; });
+            }
+        },
+
         requestData: data => {
             if (data.requestType === "columns") {
                 let columns = this.dataSetModel.get('columns');
@@ -72,7 +79,7 @@ const AnalysisResources = function(analysis, $target, iframeUrl, instanceId) {
                 for (let i = 0; i < columns.length; i++) {
                     if (columns[i].columnType === 'none')
                         continue;
-                    columnData.push({ name: columns[i].name, id: columns[i].id, measureType: columns[i].measureType, dataType: columns[i].dataType });
+                    columnData.push({ name: columns[i].name, id: columns[i].id, measureType: columns[i].measureType, dataType: columns[i].dataType, columnType:  columns[i].columnType });
                 }
                 data.columns = columnData;
             }
@@ -100,6 +107,11 @@ const AnalysisResources = function(analysis, $target, iframeUrl, instanceId) {
 
     this.frameComms = new Framesg(this.$frame[0].contentWindow, this.key, this.frameCommsApi);
 
+    this.setAnalysisTitle = function(title) {
+        if ( ! this.analysis.missingModule)
+            this.frameComms.send("setTitle", title);
+    };
+
     this.destroy = function() {
         this.$frame.remove();
         //this.frameComms.disconnect(); //This function doesn't yet exist which is a problem and a slight memory leak, i have submitted an issue to the project.
@@ -107,8 +119,9 @@ const AnalysisResources = function(analysis, $target, iframeUrl, instanceId) {
         this.frameComms.receiveNamespace = "deleted"; //this will result in the internal message function exiting without executing any potentially problematic commands. However, the event handler is still attached and this is a problem.
     };
 
-    this.setDataModel = function(dataSetModel) {
+    this.setDataModel = function(dataSetModel, instance) {
         this.dataSetModel = dataSetModel;
+        this.instance = instance;
     };
 
     this.updateData = function(options) {
@@ -127,15 +140,19 @@ const AnalysisResources = function(analysis, $target, iframeUrl, instanceId) {
     this.ready = Promise.all([
         new Promise((resolve, reject) => {
             if (analysis.missingModule) {
-                this.def = { error: 'Missing module: ' + analysis.name };
+                this.def = { error: 'Missing module: ' + analysis.ns };
                 resolve(this.def);
             }
+            else if (analysis.uijs) {
+                this.def = analysis.uijs;
+                resolve(analysis.uijs);
+            }
             else {
-                let url = '../analyses/' + analysis.ns + '/' + analysis.name;
-                return $.get(url, (script) => {
+                let url = '../analyses/' + analysis.ns + '/' + analysis.name.toLowerCase();
+                return $.get(url, null, (script) => {
                     this.def = script;
                     resolve(script);
-                });
+                }, 'text');
             }
         }),
         new Promise((resolve, reject) => {
@@ -168,7 +185,16 @@ let OptionsPanel = SilkyView.extend({
         $(window).resize(() => { this.resizeHandler(); });
         this.$el.on('resized', () => { this.resizeHandler(); });
 
+        args.model.analyses().on('analysisHeadingChanged', this._analysisNameChanged, this);
+
         this.render();
+    },
+
+    _analysisNameChanged: function(analysis) {
+        let analysesKey = analysis.ns + "-" + analysis.name;
+        let resources = this._analysesResources[analysesKey];
+        if (resources)
+            resources.setAnalysisTitle(analysis.getHeading());
     },
 
     reloadAnalyses: function(moduleName) {
@@ -201,7 +227,7 @@ let OptionsPanel = SilkyView.extend({
         let resources = this._analysesResources[analysesKey];
         let createdNew = false;
 
-        if (_.isUndefined(resources)) {
+        if (resources === undefined) {
             resources = new AnalysisResources(analysis, this.$el, this.iframeUrl, this.model.instanceId());
             resources.setDataModel(this.dataSetModel);
             this._analysesResources[analysesKey] = resources;
@@ -307,10 +333,14 @@ let OptionsPanel = SilkyView.extend({
         resource.off("frameReady");
     },
 
-    hideOptions: function(data) {
-        let selectedAnalysis = this.model.attributes.selectedAnalysis;
-        if (selectedAnalysis !== null && typeof(selectedAnalysis) !== 'string')
-            this.model.set('selectedAnalysis', null);
+    hideOptions: function(clearSelected) {
+        if (clearSelected === undefined)
+            clearSelected = true;
+        if (clearSelected) {
+            let selectedAnalysis = this.model.attributes.selectedAnalysis;
+            if (selectedAnalysis !== null && typeof(selectedAnalysis) !== 'string')
+                this.model.set('selectedAnalysis', null);
+        }
         if (this._currentResources !== null)
             this._currentResources.$frame.addClass('silky-hidden-options-control');
         this.$el.trigger("splitpanel-hide");

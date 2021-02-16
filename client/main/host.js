@@ -19,6 +19,7 @@ let resultsViewUrl;
 let isElectron;
 let version;
 let nameAndVersion;
+let dialogProvider;
 
 let doNothing = () => {};
 
@@ -42,6 +43,7 @@ let showOpenDialog = doNothing;
 let openUrl = doNothing;
 let openRecorder = doNothing;
 let triggerDownload = doNothing;
+let setDialogProvider = (provider) => { dialogProvider = provider; };
 
 let emitter = new events.EventEmitter();
 
@@ -181,10 +183,17 @@ if (navigator.userAgent.toLowerCase().indexOf(' electron/') > -1) {
             zoomLevel = 5;
             z = 100;
         }
-        webFrame.setLayoutZoomLevelLimits(-999999, 999999);
-        webFrame.setZoomFactor(z / 100);
-        let ezl = webFrame.getZoomLevel();
-        webFrame.setLayoutZoomLevelLimits(ezl, ezl);
+        if (webFrame.setLayoutZoomLevelLimits) {
+            // this was working around a bug in earlier electrons
+            webFrame.setLayoutZoomLevelLimits(-999999, 999999);
+            webFrame.setZoomFactor(z / 100);
+            let ezl = webFrame.getZoomLevel();
+            webFrame.setLayoutZoomLevelLimits(ezl, ezl);
+        }
+        else {
+            webFrame.setZoomFactor(z / 100);
+        }
+
     };
 
     currentZoom = function() {
@@ -243,7 +252,7 @@ if (navigator.userAgent.toLowerCase().indexOf(' electron/') > -1) {
     };
 
     showSaveDialog = async (options) => {
-        let selection = await dialog.showSaveDialog(browserWindow, options);
+        let selection = await dialogProvider.showDialog('export', options);
         // On linux we don't get an extension, so here we add the default one
         // https://github.com/electron/electron/issues/21935
         let hasExtension = /\.[^\/\\]+$/.test(selection.filePath);
@@ -299,13 +308,13 @@ else {
 
     currentZoom = () => 100;
 
-    require('./misc/clipboardprompt');
+    require('./utils/clipboardprompt');
     let clipboardPromptBox;
     let clipboardPrompt;
 
-    copyToClipboard = (data) => {
+    copyToClipboard = async (data) => {
 
-        if (navigator.clipboard && navigator.clipboard.write) {
+        /*if (navigator.clipboard && navigator.clipboard.write) {
 
             let transfer = new DataTransfer();
 
@@ -322,7 +331,7 @@ else {
                 return navigator.clipboard.write(transfer);
             });
         }
-        else {
+        else*/ {
             if ( ! clipboardPromptBox) {
                 clipboardPromptBox = document.createElement('jmv-infobox');
                 document.body.appendChild(clipboardPromptBox);
@@ -333,15 +342,14 @@ else {
 
             clipboardPromptBox.setup(clipboardPrompt);
 
-            let content = (data.html ? data.html : data.text);
-            let promise = clipboardPrompt.copy(content);
-            promise.finally(() => {
+            try {
+                await clipboardPrompt.copy(data);
                 clipboardPromptBox.hide();
-            });
-
-
-
-            return promise;
+            }
+            catch (e) {
+                clipboardPromptBox.hide();
+                throw e;
+            }
         }
     };
 
@@ -349,11 +357,9 @@ else {
         // should do something
     };
 
-    showOpenDialog = (window, options) => {
-        if (options === undefined) {
-            options = window;
-            window = undefined;
-        }
+    showOpenDialog = async(_, options) => {
+        if (options === undefined)
+            options = _;
 
         if ( ! showOpenDialog.browser) {
             showOpenDialog.browser = document.createElement('input');
@@ -364,18 +370,26 @@ else {
         if (showOpenDialog.cancelPrevious)
             showOpenDialog.cancelPrevious(new CancelledError());
 
+        let ua = window.navigator.userAgent;
+        let iOS = !!ua.match(/iPad/i) || !!ua.match(/iPhone/i);
+        let exts;
+
         if (options.filters) {
-            let exts = options.filters;
+            exts = options.filters;
             exts = exts.map(format => format.extensions);
             exts = exts.reduce((a, v) => a.concat(v), []);
             exts = exts.map((ext) => '.' + ext);
-            exts = exts.join(',');
-            showOpenDialog.browser.setAttribute('accept', exts);
+
+            // iOS safari and iOS chrome don't support the extension format
+            // https://caniuse.com/input-file-accept
+            if ( ! iOS)
+                showOpenDialog.browser.setAttribute('accept', exts.join(','));
+
         } else {
             showOpenDialog.browser.removeAttribute('accept');
         }
 
-        return new Promise((resolve, reject) => {
+        let files = await new Promise((resolve, reject) => {
             showOpenDialog.browser.click();
             showOpenDialog.cancelPrevious = reject;
             showOpenDialog.browser.addEventListener('change', function(event) {
@@ -383,6 +397,27 @@ else {
                 resolve(this.files);
             }, { once: true }, false);
         });
+
+        // the calling function doesn't handle exceptions, and requires a bit
+        // of work to handle them correctly, so i've disabled the following
+        // check for the time being. a check is also performed by the server,
+        // so it will get picked up there.
+
+        // if (exts) {
+        //     for (let file of files) {
+        //         let ok = false;
+        //         for (let ext of exts) {
+        //             if (file.name.endsWith(ext)) {
+        //                 ok = true;
+        //                 break;
+        //             }
+        //         }
+        //         if ( ! ok)
+        //             throw new Error('Unrecognised file format')
+        //     }
+        // }
+
+        return files;
     };
 
     triggerDownload = async(url) => {
@@ -392,6 +427,10 @@ else {
             document.body.appendChild(triggerDownload.iframe);
         }
         triggerDownload.iframe.src = url;
+    };
+
+    showSaveDialog = async (options) => {
+        return await dialogProvider.showDialog('export', options);
     };
 }
 
@@ -424,4 +463,5 @@ module.exports = {
     openUrl,
     openRecorder,
     triggerDownload,
+    setDialogProvider
 };

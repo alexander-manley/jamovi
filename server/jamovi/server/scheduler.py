@@ -8,7 +8,7 @@ from logging import getLogger
 from .analyses import Analysis
 from .jamovi_pb2 import AnalysisRequest
 from .jamovi_pb2 import AnalysisStatus
-from .queue import Queue
+from .pool import Pool
 from .utils import req_str
 
 
@@ -28,7 +28,7 @@ class Scheduler:
 
         self._analyses.add_options_changed_listener(self._send_next)
 
-        self._queue = Queue(self._n_slots)
+        self._pool = Pool(self._n_slots)
 
         self._new_tasks = AsyncQueue()
         self._run_loop_task = create_task(self._run_loop())
@@ -40,11 +40,12 @@ class Scheduler:
         # if the analysis already running, update the queue
         if analysis is not None:
             key = (analysis.instance.id, analysis.id)
-            if key in self._queue:
+            if key in self._pool:
                 analysis.status = Analysis.Status.RUNNING
                 request = self._to_message(analysis, 'init')
                 self._run_analysis(request)
                 self._n_initing += 1
+                log.debug('%s %s %s', 'inc_counters', 'initing', (self._n_initing, self._n_running, self._n_slots))
 
         if self._n_initing + self._n_running >= self._n_slots:
             return
@@ -54,6 +55,7 @@ class Scheduler:
             request = self._to_message(analysis, 'init')
             self._run_analysis(request)
             self._n_initing += 1
+            log.debug('%s %s %s', 'inc_counters', 'initing', (self._n_initing, self._n_running, self._n_slots))
             if self._n_initing + self._n_running >= self._n_slots:
                 return
 
@@ -65,6 +67,7 @@ class Scheduler:
             request = self._to_message(analysis, 'op')
             self._run_analysis(request)
             self._n_running += 1
+            log.debug('%s %s %s', 'inc_counters', 'running', (self._n_initing, self._n_running, self._n_slots))
             if self._n_running + self._n_initing >= self._n_slots:
                 return
             if self._n_running >= self._n_run_slots:
@@ -75,14 +78,15 @@ class Scheduler:
             request = self._to_message(analysis, 'run')
             self._run_analysis(request)
             self._n_running += 1
+            log.debug('%s %s %s', 'inc_counters', 'running', (self._n_initing, self._n_running, self._n_slots))
             if self._n_running + self._n_initing >= self._n_slots:
                 return
             if self._n_running >= self._n_run_slots:
                 return
 
     def _run_analysis(self, request):
-        log.debug('%s %s', 'queuing', req_str(request))
-        stream = self._queue.add(request)
+        log.debug('%s %s', 'sending_to_pool', req_str(request))
+        stream = self._pool.add(request)
         task = create_task(self._handle_results(request, stream))
         self._new_tasks.put_nowait(task)
 
@@ -149,14 +153,16 @@ class Scheduler:
         finally:
             if request.perform == INIT:
                 self._n_initing -= 1
+                log.debug('%s %s %s', 'dec_counters', 'initing', (self._n_initing, self._n_running, self._n_slots))
             else:
                 self._n_running -= 1
+                log.debug('%s %s %s', 'dec_counters', 'running', (self._n_initing, self._n_running, self._n_slots))
 
             self._send_next()
 
     @property
     def queue(self):
-        return self._queue
+        return self._pool
 
     def _to_message(self, analysis, perform, request_pb=None):
 

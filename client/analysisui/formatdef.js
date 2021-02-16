@@ -29,7 +29,7 @@ const FormatDef = {
     constructor: function(raw, format) {
 
         this.format = format;
-        if (_.isUndefined(format))
+        if (format === undefined)
             this.format = FormatDef.infer(raw);
 
         this.raw = raw;
@@ -49,7 +49,7 @@ const FormatDef = {
                 return this.raw === value;
 
             let temp = value.raw;
-            if (_.isUndefined(temp))
+            if (temp === undefined)
                 temp = value;
             else if (this.format.name !== value.format.name)
                 return false;
@@ -472,6 +472,41 @@ FormatDef.string = new Format ({
 
 });
 
+FormatDef.output = new Format ({
+
+    name: 'output',
+
+    default: null,
+
+    toString: function(raw) {
+        return raw.value.toString();
+    },
+
+    parse: function(value) {
+        return { value: value === 'true', vars: [] };
+    },
+
+    isValid: function(raw) {
+        return typeof(raw) === 'object' && typeof(raw.value) === 'boolean';
+    },
+
+    isEmpty: function(raw) {
+        return raw === null || raw.vars.length === 0;
+    },
+
+    isEqual: function(raw1, raw2) {
+        if (raw1.value === raw2.value) {
+            if (raw1.vars.length === raw2.vars.length) {
+                for (let i = 0; i < raw1.vars.length; i++) {
+                    if (raw1.vars[i] !== raw2.vars[i])
+                        return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+});
 
 
 

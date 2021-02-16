@@ -248,7 +248,7 @@ const FSEntryBrowserView = SilkyView.extend({
         html += '               <select class="silky-bs-fslist-browser-save-filetype-inner">';
         for (let i = 0; i < this.model.fileExtensions.length; i++) {
             let exts = this.model.fileExtensions[i].extensions;
-            let desc = this.model.fileExtensions[i].description;
+            let desc = this.model.fileExtensions[i].description === undefined ? this.model.fileExtensions[i].name : this.model.fileExtensions[i].description;
             let selected = '';
             if (i === 0)
                 selected = 'selected';
@@ -908,6 +908,7 @@ const BackstageModel = Backbone.Model.extend({
         lastSelectedPlace : '',
         settings : null,
         ops : [ ],
+        dialogMode : false
     },
     initialize : function(args) {
 
@@ -1018,7 +1019,7 @@ const BackstageModel = Backbone.Model.extend({
         this._pcExportListModel.clickProcess = 'export';
         this._pcExportListModel.suggestedPath = null;
         this._pcExportListModel.fileExtensions = [
-            { extensions: ['pdf'], description: "Portable Document Format (.pdf)" },
+            { extensions: ['pdf'], description: "PDF Document (.pdf)" },
             { extensions: ['html', 'htm'], description: "Web Page (.html, .htm)" },
             { extensions: ['omt'], description: 'jamovi template (.omt)' },
             { extensions: ['csv'], description: 'CSV (Comma delimited) (.csv)' },
@@ -1041,7 +1042,7 @@ const BackstageModel = Backbone.Model.extend({
         this._deviceExportListModel.writeOnly = true;
         this._deviceExportListModel.suggestedPath = null;
         this._deviceExportListModel.fileExtensions = [
-            // { extensions: ['pdf'], description: "Portable Document Format (.pdf)" },
+            { extensions: ['pdf'], description: "PDF Document (.pdf)" },
             { extensions: ['html', 'htm'], description: "Web Page (.html, .htm)" },
             { extensions: ['omt'], description: 'jamovi template (.omt)' },
             { extensions: ['csv'], description: 'CSV (Comma delimited) (.csv)' },
@@ -1060,6 +1061,17 @@ const BackstageModel = Backbone.Model.extend({
         this._deviceExportListModel.attributes.wdType = 'temp';
         this.addToWorkingDirData(this._deviceExportListModel);
 
+        this._dialogExportListModel = new FSEntryListModel();
+        this._dialogExportListModel.clickProcess = 'export';
+        if ( ! host.isElectron) {
+            this._dialogExportListModel.writeOnly = true;
+            this._dialogExportListModel.attributes.wdType = 'temp';
+        }
+        this._dialogExportListModel.suggestedPath = null;
+        this._dialogExportListModel.fileExtensions = [ ];
+        this._dialogExportListModel.on('dataSetExportRequested', this.dialogExport, this);
+        this._dialogExportListModel.on('browseRequested', this.dialogBrowse, this);
+        this.addToWorkingDirData(this._dialogExportListModel);
 
         this._savePromiseResolve = null;
 
@@ -1079,6 +1091,75 @@ const BackstageModel = Backbone.Model.extend({
 
         ];
 
+    },
+    showDialog: async function(type, options) {
+        this.set('dialogMode', true);
+        this._dialogPath = null;
+        this._dialogExportListModel.fileExtensions = options.filters;
+
+        let _oldOps = this.get('ops');
+
+        let _ops = [ ];
+        if ( ! host.isElectron) {
+            _ops = [
+                {
+                    name: type,
+                    title: options.title,
+                    places: [
+                        /*{
+                            name: 'thispc', title: 'jamovi Cloud', separator: true, model: this._pcExportListModel, view: FSEntryBrowserView,
+                            action: () => {
+                                this._pcExportListModel.suggestedPath = this.instance.get('title');
+                            }
+                        },*/
+                        {
+                            name: 'thisdevice', title: 'Download', model: this._dialogExportListModel, view: FSEntryBrowserView,
+                            action: () => {
+                                this._dialogExportListModel.suggestedPath = this.instance.get('title');
+                            }
+                        },
+                    ]
+                }
+            ];
+        }
+        else {
+            _ops = [
+                {
+                    name: type,
+                    title: options.title,
+                    places: [
+                        {
+                            name: 'thispc', title: 'This PC', model: this._dialogExportListModel, view: FSEntryBrowserView,
+                            action: () => {
+                                this._dialogExportListModel.suggestedPath = this.instance.get('title');
+                            }
+                        }
+                    ]
+                }
+            ];
+        }
+        this.set('ops', _ops);
+
+        this.set('activated', true);
+        this.set('operation', type);
+        await new Promise((resolve) => {
+            this.once('change:activated', () => resolve());
+        });
+
+        try {
+            this.set('ops', _oldOps);
+            this.set('dialogMode', false);
+            if (this._dialogPath === null)
+                throw undefined;
+            return {
+                filePath: this._dialogPath,
+                canceled: false
+            };
+        } catch(e) {
+            return {
+                canceled: true
+            };
+        }
     },
     createOps: function() {
         let mode = this.instance.settings().getSetting('mode', 'normal');
@@ -1273,8 +1354,10 @@ const BackstageModel = Backbone.Model.extend({
     tryBrowse: async function(list, type, filename) {
 
         let filters = [];
-        for (let i = 0; i < list.length; i++)
-            filters.push({ name: list[i].description, extensions: list[i].extensions });
+        for (let i = 0; i < list.length; i++) {
+            let desc = list[i].description === undefined ? list[i].name : list[i].description;
+            filters.push({ name: desc, extensions: list[i].extensions });
+        }
 
         if (host.isElectron) {
 
@@ -1323,6 +1406,11 @@ const BackstageModel = Backbone.Model.extend({
                     if (result.canceled)
                         return;
                     let filePath = result.filePath.replace(/\\/g, '/');
+
+                    // browse under linux often doesn't add an extension :/
+                    if (path.extname(filePath) === '')
+                        filePath = `${ filePath }.${ filters[0].extensions[0] }`;
+
                     this.requestSave(filePath, { overwrite: true }).catch((e) => {
                         if ( ! this.instance.attributes.saveFormat) {
                             this.set('activated', true);
@@ -1426,6 +1514,98 @@ const BackstageModel = Backbone.Model.extend({
             this.set('operation', 'export');
         }
     },
+    dialogExport: function(filePath, type) {
+        this._dialogPath = filePath;
+        this.set('activated', false);
+    },
+    dialogBrowse: async function(list, type, filename) {
+
+        let filters = [];
+        for (let i = 0; i < list.length; i++) {
+            let desc = list[i].description === undefined ? list[i].name : list[i].description;
+            filters.push({ name: desc, extensions: list[i].extensions });
+        }
+
+        if (host.isElectron) {
+
+            if (this._wdData.main.initialised === false)
+                return;
+
+            let remote = window.require('electron').remote;
+            let browserWindow = remote.getCurrentWindow();
+            let dialog = remote.dialog;
+            let osPath = this._wdData.main.oswd;
+
+            // all this dialog stuff should get moved into host.js
+
+            if (type === 'open') {
+
+                await dialog.showOpenDialog(browserWindow, {
+                    filters: filters,
+                    properties: [ 'openFile' ],
+                    defaultPath: path.join(osPath, '')
+                }).then((result) => {
+                    if (result.canceled)
+                        return;
+                    this._dialogPath = result.filePaths[0].replace(/\\/g, '/');
+                });
+            }
+            else if (type === 'import') {
+
+                await dialog.showOpenDialog(browserWindow, {
+                    filters: filters,
+                    properties: [ 'openFile', 'multiSelections' ],
+                    defaultPath: path.join(osPath, '')
+                }).then((result) => {
+                    if (result.canceled)
+                        return;
+                    this._dialogPath = result.filePaths.map(x => x.replace(/\\/g, '/'));
+                });
+            }
+            else if (type === 'save') {
+
+                await dialog.showSaveDialog(browserWindow, {
+                    filters : filters,
+                    defaultPath: path.join(osPath, filename),
+                }).then((result) => {
+                    if (result.canceled)
+                        return;
+                    this._dialogPath = result.filePath.replace(/\\/g, '/');
+
+                    // browse under linux often doesn't add an extension :/
+                    if (path.extname(this._dialogPath) === '')
+                        this._dialogPath = `${ this._dialogPath }.${ filters[0].extensions[0] }`;
+                });
+            }
+        }
+        else {
+            if (type === 'open') {
+                try {
+                    let files = await host.showOpenDialog({ filters });
+                    this._dialogPath = files[0];
+                }
+                catch (e) {
+                    if (e instanceof CancelledError)
+                        ;  // do nothing
+                    else
+                        throw e;
+                }
+            }
+            else if (type === 'import') {
+                try {
+                    let files = await host.showOpenDialog({ filters });
+                    this._dialogPath = files;
+                }
+                catch (e) {
+                    if (e instanceof CancelledError)
+                        ;  // do nothing
+                    else
+                        throw e;
+                }
+            }
+        }
+        this.set('activated', false);
+    },
     setCurrentDirectory: function(wdType, dirPath, type, writeOnly=false) {
         if (dirPath === '')
             dirPath = this._wdData[wdType].defaultPath;
@@ -1463,7 +1643,15 @@ const BackstageModel = Backbone.Model.extend({
             statusTimeout = null;
         }, 100);
 
-        let promise = this.instance.browse(dirPath);
+        let extensions = [];
+        let currentPlace = this.getCurrentPlace();
+        if (currentPlace.model.fileExtensions) {
+            for (let extDesc of currentPlace.model.fileExtensions)
+                for (let ext of extDesc.extensions)
+                    extensions.push(ext);
+        }
+
+        let promise = this.instance.browse(dirPath, extensions);
         promise = promise.then(response => {
             if (statusTimeout) {
                 clearTimeout(statusTimeout);
@@ -1772,6 +1960,14 @@ const BackstageView = SilkyView.extend({
         this.model.on('change:operation', this._opChanged, this);
         this.model.on('change:place',     this._placeChanged, this);
         this.model.on('change:ops',       this.render, this);
+        this.model.on('change:dialogMode', this._dialogModeChanged, this);
+    },
+    _dialogModeChanged: function() {
+        let $recents = this.$el.find('.silky-bs-op-recents-main');
+        if (this.model.get('dialogMode'))
+            $recents.hide();
+        else
+            $recents.show();
     },
     events: {
         'click .silky-bs-back-button div' : 'deactivate',
@@ -1855,6 +2051,11 @@ const BackstageView = SilkyView.extend({
         this.$opPanel.append($('<div class="silky-bs-op-separator"></div>'));
 
         let $op = $('<div class="silky-bs-op-recents-main"></div>');
+        if (this.model.get('dialogMode'))
+            $op.hide();
+        else
+            $op.show();
+
         let $opTitle = $('<div class="silky-bs-op-header" data-op="' + 'Recent' + '" ' + '>' + 'Recent' + '</div>').appendTo($op);
         let $recentsBody = $('<div class="silky-bs-op-recents"></div>').appendTo($op);
         $op.appendTo(this.$opPanel);

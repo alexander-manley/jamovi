@@ -52,6 +52,12 @@ class Column:
         self._needs_recalc = False
         self._formula_status = FormulaStatus.EMPTY
 
+        self.output_analysis_id = None
+        self.output_option_name = None
+        self.output_name = None
+        self.output_desired_column_name = None
+        self.output_assigned_column_name = None
+
     def _create_child(self):
         if self._child is None:
             self._parent._realise_column(self)
@@ -86,6 +92,9 @@ class Column:
                 return Column.Cell(value, False)
             else:
                 return value
+
+    def is_row_filtered(self, index):
+        return self._parent.is_row_filtered(index)
 
     @property
     def cell_tracker(self):
@@ -389,14 +398,16 @@ class Column:
         self._child.refresh_filter_state()
 
     def clear_levels(self):
-        if self._child is None:
-            self._create_child()
-        self._child.clear_levels()
+        if self._child is not None:
+            self._child.clear_levels()
+
+    def clear(self):
+        if self._child is not None:
+            self._child.clear()
 
     def trim_unused_levels(self):
-        if self._child is None:
-            self._create_child()
-        self._child.trim_unused_levels()
+        if self._child is not None:
+            self._child.trim_unused_levels()
 
     @property
     def has_levels(self):

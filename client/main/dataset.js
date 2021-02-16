@@ -154,6 +154,9 @@ const DataSetModel = Backbone.Model.extend({
                 return transform;
         }
     },
+    getFirstEmptyColumn() {
+        return this.getColumn(this.get('columnCount'));
+    },
     getColumn(index, isDisplayIndex) {
         if (isDisplayIndex) {
             if (index > -1) {
@@ -1049,7 +1052,6 @@ const DataSetModel = Backbone.Model.extend({
 
         return { names: levelNameChanges, order: orderChanged };
     },
-
     _determineMissingValuesChange(column, columnPB) {
         if ( ! (columnPB && columnPB.missingValues && Array.isArray(columnPB.missingValues) &&
             column && column.missingValues && Array.isArray(column.missingValues)))
@@ -1120,7 +1122,6 @@ const DataSetModel = Backbone.Model.extend({
         }
         column.levels = levels;
     },
-
     _readTransformPB(transform, transformPB) {
         transform.id = transformPB.id;
         transform.name = transformPB.name;
@@ -1131,7 +1132,6 @@ const DataSetModel = Backbone.Model.extend({
         transform.colourIndex = transformPB.colourIndex;
         transform.measureType = DataSetModel.stringifyMeasureType(transformPB.measureType);
     },
-
     setTransforms(pairs) {
 
         let coms = this.attributes.coms;
@@ -1219,7 +1219,6 @@ const DataSetModel = Backbone.Model.extend({
             throw error;
         });
     },
-
     removeTransforms(ids) {
 
         let coms = this.attributes.coms;
@@ -1253,7 +1252,6 @@ const DataSetModel = Backbone.Model.extend({
             throw error;
         });
     },
-
     undo() {
         let coms = this.attributes.coms;
         let datasetPB = new coms.Messages.DataSetRR();
@@ -1322,7 +1320,6 @@ DataSetModel.parseMeasureType = function(str) {
     }
 };
 
-
 DataSetModel.stringifyColumnType = function(type) {
     switch (type) {
         case 1:
@@ -1333,6 +1330,8 @@ DataSetModel.stringifyColumnType = function(type) {
             return 'recoded';
         case 4:
             return 'filter';
+        case 5:
+            return 'output';
         case 0:
             return 'none';
         default:
@@ -1350,6 +1349,8 @@ DataSetModel.parseColumnType = function(str) {
             return 3;
         case 'filter':
             return 4;
+        case 'output':
+            return 5;
         case 'none':
             return 0;
         default:
@@ -1853,6 +1854,5 @@ const genColName = function(index) {
 
     return value;
 };
-
 
 module.exports = DataSetViewModel;

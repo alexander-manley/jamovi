@@ -3,6 +3,15 @@
 
 const $ = require('jquery');
 
+let _registeredNodeObjs = null;
+
+function registerNodeObject(node, object) {
+    if (_registeredNodeObjs === null)
+        _registeredNodeObjs = new WeakMap();
+
+    _registeredNodeObjs.set(node, object);
+}
+
 function csvifyCells(cells) {
     if (cells.length === 0)
         return '';
@@ -73,10 +82,13 @@ function exportElem(el, format, options={ images:'absolute', margin: '24', docTy
             html = Promise.resolve(el);
         }
         else {
-            if (options.exclude) {
-                options.excludeTags = options.exclude.filter(x => ! x.startsWith('.'));
-                options.excludeClasses = options.exclude.filter(x => x.startsWith('.')).map(x => x.substring(1));
-            }
+            if (options.exclude === undefined)
+                options.exclude = [];
+
+            options.exclude.push('.ignore-html');
+
+            options.excludeTags = options.exclude.filter(x => ! x.startsWith('.'));
+            options.excludeClasses = options.exclude.filter(x => x.startsWith('.')).map(x => x.substring(1));
 
             html = _htmlify(el, options);
         }
@@ -146,6 +158,42 @@ function exportElem(el, format, options={ images:'absolute', margin: '24', docTy
     table tr td, table tr th {
         page-break-inside: avoid;
         font-size: 12px ;
+    }
+
+    .ql-align-center {
+        text-align: center;
+    }
+
+    .ql-align-right {
+        text-align: right;
+    }
+
+    .ql-align-justify {
+        text-align: justify;
+    }
+
+    .ql-indent-1 {
+        padding-left: 3em;
+    }
+
+    .ql-indent-2 {
+        padding-left: 6em;
+    }
+
+    .ql-indent-3 {
+        padding-left: 9em;
+    }
+
+    .ql-indent-4 {
+        padding-left: 12em;
+    }
+
+    .ql-indent-5 {
+        padding-left: 15em;
+    }
+
+    .note {
+        margin: 5px 0px;
     }
         </style>
 </head>
@@ -284,9 +332,12 @@ function _htmlify(el, options) {
         case 'tfoot':
         case 'tr':
         case 'pre':
-        case 'p':
         case 'em':
         case 'a':
+        case 'u':
+        case 's':
+        case 'strong':
+        case 'b':
         case 'sub':
         case 'sup':
             include = true;
@@ -295,6 +346,31 @@ function _htmlify(el, options) {
             include = true;
             styles = [ 'font-weight' ];
             break;
+        case 'p':
+            include = true;
+            styles = [
+                'text-align',
+                'padding'
+            ];
+            break;
+        case 'ol':
+        case 'ul':
+            include = true;
+            styles = [
+                'text-align',
+                'padding',
+                'list-style-type'
+            ];
+            break;
+        case 'li':
+            include = true;
+            styles = [
+                'display',
+                'text-align',
+                'padding'
+            ];
+            break;
+
         case 'td':
         case 'th':
             include = true;
@@ -326,6 +402,8 @@ function _htmlify(el, options) {
             include = false;
             includeChildren = false;
         }
+        else if (tag === 'div' && html !== '')
+            includeChildren = false;
 
         html += prepend;
 
@@ -336,9 +414,23 @@ function _htmlify(el, options) {
                     html += ' ' + attrib.name + '="' + attrib.value + '"';
             }
             if (styles.length > 0) {
+                let cs = getComputedStyle(el);
                 html += ' style="';
-                for (let style of styles)
-                    html += style + ':' + $(el).css(style) + ';';
+                for (let style of styles) {
+                    let value = cs.getPropertyValue(style);
+                    if ( ! value) {
+                        if (style === 'padding') {
+                            value = `${ cs.getPropertyValue('padding-top') } ${ cs.getPropertyValue('padding-right')} ${ cs.getPropertyValue('padding-bottom') } ${ cs.getPropertyValue('padding-left') }`;
+                        }
+                        else if (['border-top', 'border-right', 'border-bottom', 'border-top'].includes(style)) {
+                            let w = cs.getPropertyValue(`${ style }-width`);
+                            let s = cs.getPropertyValue(`${ style }-style`);
+                            let c = cs.getPropertyValue(`${ style }-color`);
+                            value = `${ w } ${ s } ${ c }`;
+                        }
+                    }
+                    html += `${ style }:${ value };`;
+                }
                 html += '"';
             }
             html += '>';
@@ -378,14 +470,26 @@ function _htmlifyIFrame(el, options) {
 
 function _htmlifyDiv(el, options) {
 
+    let $el = $(el);
+
+    if ($el.hasClass('jmv-annotation')) {
+        let obj = _registeredNodeObjs.get(el);
+        if (obj) {
+            let note = obj.getHTML();
+            if (note !== '')
+                return `<div class="note"> ${ note } </div>`;
+        }
+        return Promise.resolve('');
+    }
+
     let str = '';
-    let bgiu = $(el).css('background-image');
+    let bgiu = $el.css('background-image');
 
     if (bgiu === 'none')
         return Promise.resolve('');
 
-    let width = $(el).css('width');
-    let height = $(el).css('height');
+    let width = $el.css('width');
+    let height = $el.css('height');
     let bgi = /(?:\(['"]?)(.*?)(?:['"]?\))/.exec(bgiu)[1]; // remove surrounding uri(...)
 
     if (options.images === 'absolute') {
@@ -434,4 +538,4 @@ function _htmlifyDiv(el, options) {
     });
 }
 
-module.exports = { exportElem, csvifyCells, htmlifyCells };
+module.exports = { exportElem, csvifyCells, htmlifyCells, registerNodeObject };

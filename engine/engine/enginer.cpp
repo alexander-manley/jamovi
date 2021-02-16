@@ -280,10 +280,8 @@ void EngineR::setLibPaths(const std::string &moduleName)
     for (auto path : moduleR)
     {
         ss << ",'" << makeAbsolute(path) << "/" << moduleName << "/R'";
+        ss << ",'" << makeAbsolute(path) << "/jmv/R'";
         ss << ",'" << makeAbsolute(path) << "/base/R'";
-
-        if (moduleName == "Rj")
-            ss << ", '" << makeAbsolute(path) << "/jmv/R'";
     }
 
     for (auto path : sysR)
@@ -425,6 +423,7 @@ void EngineR::initR()
 #endif
 
     _rInside->parseEvalQNT("base::options(max.print=1000)\n");
+    _rInside->parseEvalQNT("base::options(digits=4)\n");
 
     char *pandoc = nowide::getenv("PANDOCHOME");
 
@@ -504,6 +503,11 @@ void EngineR::initR()
     );
 
     setLibPaths("jmv");
+
+#ifdef _WIN32
+    // necessary on windows ...
+    _rInside->parseEvalQNT("requireNamespace('Rcpp', quietly=TRUE)\n");
+#endif
 
     // without this, on macOS, knitr tries to load X11
     _rInside->parseEvalQNT("env <- knitr::knit_global();env$CairoPNG <- grDevices::png\n");

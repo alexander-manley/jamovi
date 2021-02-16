@@ -16,10 +16,12 @@ const Notify = require('./notification');
 const Analyses = require('./analyses');
 const DataSetViewModel = require('./dataset');
 const OptionsPB = require('./optionspb');
+const Modules = require('./modules');
 
 const Settings = require('./settings');
 const ProgressStream = require('./utils/progressstream');
 const JError = require('./errors').JError;
+const { flatten, unflatten } = require('../common/utils/addresses');
 
 
 const Instance = Backbone.Model.extend({
@@ -31,16 +33,16 @@ const Instance = Backbone.Model.extend({
         this.seqNo = 0;
 
         this._settings = new Settings({ coms: this.attributes.coms });
+        this._modules = new Modules({ instance: this });
 
         this._dataSetModel = new DataSetViewModel({ coms: this.attributes.coms });
         this._dataSetModel.on('columnsChanged', this._columnsChanged, this);
 
-        this._analyses = new Analyses();
-        this._analyses.set('dataSetModel', this._dataSetModel);
+        this._analyses = new Analyses({
+            modules: this._modules,
+            dataSetModel: this._dataSetModel });
 
-        this._analyses.on('analysisCreated', this._analysisCreated, this);
         this._analyses.on('analysisOptionsChanged', this._runAnalysis, this);
-        this._analyses.on('analysisDeleted', this._analysisDeleted, this);
 
         this._settings.on('change:theme', event => this._themeChanged());
         this._settings.on('change:palette', event => this._paletteChanged());
@@ -53,8 +55,6 @@ const Instance = Backbone.Model.extend({
     },
     destroy() {
         this._dataSetModel.off('columnsChanged', this._columnsChanged, this);
-        this._analyses.off('analysisCreated', this._analysisCreated, this);
-        this._analyses.off('analysisDeleted', this._analysisDeleted, this);
         this._analyses.off('analysisOptionsChanged', this._runAnalysis, this);
         this.attributes.coms.off('broadcast', this._onBC);
         this._settings.destroy();
@@ -67,7 +67,8 @@ const Instance = Backbone.Model.extend({
         title : '',
         blank : false,
         resultsSupplier: null,
-        arbitraryCodePresent: false
+        arbitraryCodePresent: false,
+        editState: false
     },
     instanceId() {
         return this._instanceId;
@@ -80,6 +81,9 @@ const Instance = Backbone.Model.extend({
     },
     settings() {
         return this._settings;
+    },
+    modules() {
+        return this._modules;
     },
     connect(instanceId) {
 
@@ -95,7 +99,7 @@ const Instance = Backbone.Model.extend({
 
         }).then(() => {
 
-            return this._retrieveInfo();
+            return this._readDataset();
 
         }).then(() => {
 
@@ -124,7 +128,7 @@ const Instance = Backbone.Model.extend({
 
         return coms.send(request).then((response) => {
             progress.dismiss();
-            this._retrieveInfo();
+            this._readDataset(false);
             this._notify({
                 message: 'File imported',
                 cause: 'Import successful',
@@ -134,7 +138,7 @@ const Instance = Backbone.Model.extend({
             // we still have to retrieveInfo() on failure, because the import
             // may have failed on, say, the second data set, and the data set
             // will still have changed
-            this._retrieveInfo();
+            this._readDataset(false);
             this._notify(error);
         }, (prog) => {
             progress.set('progress', prog);
@@ -281,7 +285,8 @@ const Instance = Backbone.Model.extend({
                 return this.attributes.resultsSupplier.getAsHTML({images:'relative', generator:app}, options.part);
             }
             else if (filePath.endsWith('.pdf')) {
-                return this.attributes.resultsSupplier.getAsHTML({images:'absolute', generator:app}, options.part)
+                let images = host.isElectron ? 'absolute' : 'inline';
+                return this.attributes.resultsSupplier.getAsHTML({images:images, generator:app}, options.part)
                     .then(html => this._requestPDF(html));
             }
             else {
@@ -292,11 +297,13 @@ const Instance = Backbone.Model.extend({
 
             // Send the save request
 
+            let part = options.part;
+
             let save = new coms.Messages.SaveRequest(
                 filePath,
                 options.overwrite,
                 options.export,
-                options.part,
+                part,
                 options.format);
 
             if (content) {
@@ -396,12 +403,13 @@ const Instance = Backbone.Model.extend({
             throw error;
         });
     },
-    browse(filePath) {
+    browse(filePath, extensions) {
 
         let coms = this.attributes.coms;
 
         let fs = new coms.Messages.FSRequest();
         fs.path = filePath;
+        fs.extensions = extensions;
 
         let message = new coms.Messages.ComsMessage();
         message.payload = fs.toArrayBuffer();
@@ -535,7 +543,7 @@ const Instance = Backbone.Model.extend({
             this._instanceId = response.instanceId;
         });
     },
-    async _retrieveInfo() {
+    async _readDataset(loadAnalyses=true) {
 
         let coms = this.attributes.coms;
 
@@ -559,50 +567,55 @@ const Instance = Backbone.Model.extend({
             this.set('blank',      info.blank);
         }
 
-        let allWaits = info.analyses.map((analysisPB) => {
-            let options = OptionsPB.fromPB(analysisPB.options, coms.Messages);
-            let analysis = this._analyses.create({
-                name: analysisPB.name,
-                ns: analysisPB.ns,
-                id: analysisPB.analysisId,
-                options: options,
-                results: analysisPB.results,
-                incAsText: analysisPB.incAsText,
-                references: analysisPB.references,
-                enabled: false,
-            });
-            return analysis.ready;
-        });
+        if (loadAnalyses) {
 
-        await Promise.all(allWaits);
+            let allAnalysesReady = [ ];
 
-        for (let analysis of this._analyses) {
-            if (analysis.arbitraryCode)
-                this.set('arbitraryCodePresent', true);
-            else
-                analysis.enabled = true;
+            for (let analysisPB of info.analyses) {
+
+                let options = OptionsPB.fromPB(analysisPB.options, coms.Messages);
+                let analysis = this._analyses.create({
+                    name: analysisPB.name,
+                    ns: analysisPB.ns,
+                    id: analysisPB.analysisId,
+                    options: options,
+                    results: analysisPB.results,
+                    incAsText: analysisPB.incAsText,
+                    references: analysisPB.references,
+                    enabled: false,
+                    dependsOn: analysisPB.dependsOn
+                });
+                if (analysis.results.status !== 3)
+                    this._runAnalysis(analysis);
+
+                allAnalysesReady.push(analysis.ready);
+
+                // sleep to allow iframes to load, etc. so it can progressively
+                // update rather than waiting until the end
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+
+            await Promise.all(allAnalysesReady);
+
+            for (let analysis of this._analyses) {
+                if (analysis.arbitraryCode)
+                    this.set('arbitraryCodePresent', true);
+                else
+                    analysis.enabled = true;
+            }
         }
 
         return response;
     },
     createAnalysis(name, ns, title) {
-
-        this._dataSetModel.set('edited', true);
-
         let analysis = this._analyses.create({ name, ns, title, enabled: true });
+        this._sendAnalysis(analysis);
         this.set('selectedAnalysis', analysis);
-
-        let request = this._constructAnalysisRequest(analysis, { });
-        request.perform = 0; // INIT
-
-        this._sendAnalysisRequest(request);
-
-        return analysis;
     },
     duplicateAnalysis(dupliceeId) {
 
         let duplicee = this._analyses.get(dupliceeId);
-        let index = duplicee.index + 1;
+        let index = duplicee.index + 2; //insert after proceeding annotation
         let analysis = this._analyses.create({
             name: duplicee.name,
             ns: duplicee.ns,
@@ -610,12 +623,9 @@ const Instance = Backbone.Model.extend({
             options: duplicee.options.getValues(),
             results: duplicee.results,
             incAsText: duplicee.incAsText,
-            references: duplicee.references,
+            references: duplicee.references
         });
-
-        let request = this._constructAnalysisRequest(analysis, { duplicate: duplicee.id });
-        request.perform = 7; // DUPLICATE
-        this._sendAnalysisRequest(request);
+        this._sendAnalysis(analysis, duplicee);
 
         return analysis;
     },
@@ -644,12 +654,15 @@ const Instance = Backbone.Model.extend({
             else
                 options = { };
         }
-        let extras = this._optionsExtras();
+
+        let extras = {};
+        if (analysis.ns !== 'jmv' || analysis.name !== 'empty')
+            extras = this._optionsExtras();
 
         request.setOptions(OptionsPB.toPB(options, extras, coms.Messages));
         return request;
     },
-    _sendAnalysisRequest(request) {
+    _sendAnalysisRequest(request, analysis) {
 
         let coms = this.attributes.coms;
 
@@ -658,14 +671,9 @@ const Instance = Backbone.Model.extend({
         message.payloadType = 'AnalysisRequest';
         message.instanceId = this._instanceId;
 
-        coms.sendP(message);
-    },
-    _analysisCreated(analysis) {
-        if (analysis.results.status !== 3)
-            this._runAnalysis(analysis);
+        return coms.sendP(message);
     },
     _runAnalysis(analysis, changed) {
-
         let coms = this.attributes.coms;
         this._dataSetModel.set('edited', true);
 
@@ -675,46 +683,122 @@ const Instance = Backbone.Model.extend({
         if (changed)
             request.changed = changed;
 
-        this._sendAnalysisRequest(request);
+        this._sendAnalysisRequest(request, analysis);
     },
-    _analysisDeleted(analysis) {
+    _sendAnalysis(analysis, duplicee) {
+        let coms = this.attributes.coms;
+        this._dataSetModel.set('edited', true);
+
+        let request = null;
+        if (duplicee !== undefined) {
+            request = this._constructAnalysisRequest(analysis, { duplicate: duplicee.id });
+            request.perform = 7; // DUPLICATE
+        }
+        else {
+            request = this._constructAnalysisRequest(analysis);
+            request.perform = 0; // INIT
+        }
+
+        this._sendAnalysisRequest(request, analysis);
+    },
+    deleteAnalysis(analysis) {
         let coms = this.attributes.coms;
         this._dataSetModel.set('edited', true);
         let request = this._constructAnalysisRequest(analysis);
         request.perform = 6; // DELETE
+        this._sendAnalysisRequest(request, analysis);
+    },
+    deleteAll() {
+        let coms = this.attributes.coms;
+        this._dataSetModel.set('edited', true);
+        let request = new coms.Messages.AnalysisRequest();
+        request.analysisId = 0;
+        request.perform = 6; // DELETE
         this._sendAnalysisRequest(request);
     },
-    _onReceive(message) {
+    _onReceive(payloadType, response) {
 
         let coms = this.attributes.coms;
 
-        if (message.payloadType === 'AnalysisResponse') {
-            let response = coms.Messages.AnalysisResponse.decode(message.payload);
+        if (response === undefined) {
+            let message = payloadType;
+            payloadType = message.payloadType;
+            if ( ! payloadType)
+                return;
 
+            response = coms.Messages[message.payloadType].decode(message.payload);
+        }
+
+        if (payloadType === 'AnalysisRequest') {
+            if (response.perform === 6)  { // deleted
+                if (response.analysisId === 0)
+                    this._analyses.onDeleteAll();
+                else
+                    this._analyses.deleteAnalysis(response.analysisId);
+                return;
+            }
+        }
+        else if (payloadType === 'AnalysisResponse') {
             let id = response.analysisId;
             let analysis = this._analyses.get(id);
 
-            if ( ! analysis)  // deleted
-                return;
+            if ( ! analysis) {
+                if (response.analysisId === 0)
+                    throw 'Analysis Id can not be 0';
 
-            let options = {};
-            if (response.revision === analysis.revision)
-                options = OptionsPB.fromPB(response.options, coms.Messages);
+                if (response.analysisId % 2 === 0)
+                    throw `Analysis with id ${ response.analysisId } does not exist.`;
 
-            if (analysis.isReady === false)
-                analysis.setup(options);
-
-            if (response.results)
-                analysis.setResults({
-                    results: response.results,
+                let options = OptionsPB.fromPB(response.options, coms.Messages);
+                analysis = this._analyses.create({
+                    name: response.name,
+                    title: response.hasTitle ? response.title : undefined,
+                    ns: response.ns,
+                    id: response.analysisId,
                     options: options,
+                    results: response.results,
                     incAsText: response.incAsText,
                     references: response.references,
+                    enabled: response.enabled,
+                    index: response.index - 1,
+                    dependsOn: response.dependsOn
                 });
+
+                /*for (let current of this._analyses) {
+                    if (current.waitingFor === analysis.id) {
+                        analysis.addDependent(current);
+                    }
+                }*/
+
+                if (response.name !== 'empty')
+                    this.set('selectedAnalysis', analysis);
+            }
+            else {
+                analysis.results.index = response.index;
+                analysis.index = response.index - 1;
+
+                let options = {};
+                if (response.revision === analysis.revision)
+                    options = OptionsPB.fromPB(response.options, coms.Messages);
+
+                if (analysis.isReady === false)
+                    analysis.setup(options);
+
+                if (response.results)
+                    analysis.setResults({
+                        results: response.results,
+                        options: options,
+                        incAsText: response.incAsText,
+                        references: response.references,
+                    });
+            }
         }
-        else if (message.payloadType === 'ModuleRR') {
-            let response = coms.Messages.ModuleRR.decode(message.payload);
+        else if (payloadType === 'DataSetRR') {
+            this._dataSetModel._processDatasetRR(response);
+        }
+        else if (payloadType === 'ModuleRR') {
             let moduleName = response.name;
+            this._modules.purgeCache(moduleName);
 
             for (let analysis of this._analyses) {
                 if (analysis.ns === moduleName)
@@ -723,9 +807,25 @@ const Instance = Backbone.Model.extend({
 
             this.trigger('moduleInstalled', { name: moduleName });
         }
-        else if (message.payloadType === 'LogRR') {
-            let log = coms.Messages.LogRR.decode(message.payload);
-            console.log(log.content);
+        else if (payloadType === 'Notification') {
+
+            this._notifs = this._notifs || { };
+            let notif = this._notifs[response.id] || new Notify();
+            this._notifs[response.id] = notif;
+
+            if (response.status !== 1) {
+                notif.set({
+                    title: response.title,
+                    message: response.message });
+                this.trigger('notification', notif);
+            }
+            else {
+                notif.dismiss();
+                delete this._notifs[response.id];
+            }
+        }
+        else if (payloadType === 'LogRR') {
+            console.log(response.content);
         }
     },
     _columnsChanged(event) {
@@ -736,7 +836,7 @@ const Instance = Backbone.Model.extend({
             if (analysis.isReady === false)
                 continue;
 
-            let using = analysis.getUsing();
+            let using = analysis.getUsingColumns();
 
             let columnDataChanged = false;
             let columnDeleted = false;
@@ -745,6 +845,7 @@ const Instance = Backbone.Model.extend({
             let columnRenames = [];
             let levelRenames = [];
             let columnDeletes = [];
+            let rerunAnalysis = false;
 
             for (let changes of event.changes) {
 
@@ -752,6 +853,8 @@ const Instance = Backbone.Model.extend({
                     if (using.includes(changes.name)) {
                         columnDeleted = true;
                         columnDeletes.push(changes.name);
+                        if (changes.columnType !== 'output')
+                            rerunAnalysis = true;
                     }
                 }
                 else {
@@ -769,9 +872,13 @@ const Instance = Backbone.Model.extend({
                             changes.missingValuesChanged ||
                             changes.descriptionChanged)
                         columnDataChanged = true;
+                        if (changes.columnType !== 'output')
+                            rerunAnalysis = true;
                     }
                     if (changes.nameChanged && using.includes(changes.oldName)) {
                         columnRenamed = true;
+                        if (changes.columnType !== 'output')
+                            rerunAnalysis = true;
                         columnRenames.push({ oldName: changes.oldName, newName: column.name });
                     }
                     if (changes.levelsChanged) {
@@ -783,16 +890,17 @@ const Instance = Backbone.Model.extend({
             }
 
             if (columnRenamed)
-                analysis.renameColumns(columnRenames);
+                analysis.notifyColumnsRenamed(columnRenames);
 
             if (levelsRenamed)
-                analysis.renameLevels(levelRenames);
+                analysis.notifyLevelsRenamed(levelRenames);
 
             if (columnDataChanged || columnRenamed || columnDeleted) {
                 let selectedAnalysis = this.get('selectedAnalysis');
                 if (selectedAnalysis !== null && selectedAnalysis.id === analysis.id)
                     this.trigger("change:selectedAnalysis", { changed: { selectedAnalysis: analysis } });
-                this._runAnalysis(analysis, event.changed);
+                if (rerunAnalysis)
+                    this._runAnalysis(analysis, event.changed);
             }
         }
     },

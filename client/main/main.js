@@ -21,7 +21,6 @@ const VariableEditor = require('./variableeditor');
 const ActionHub = require('./actionhub');
 
 const Instance = require('./instance');
-const Modules = require('./modules');
 const Notify = require('./notification');
 const JError = require('./errors').JError;
 
@@ -73,8 +72,9 @@ let dataSetModel = instance.dataSetModel();
 let analyses = instance.analyses();
 
 let backstageModel = new BackstageModel({ instance: instance });
-let modules = new Modules({ instance: instance });
-let ribbonModel = new RibbonModel({ modules: modules, settings: instance.settings() });
+let ribbonModel = new RibbonModel({ modules: instance.modules(), settings: instance.settings() });
+
+host.setDialogProvider(backstageModel);
 
 let infoBox = document.createElement('jmv-infobox');
 infoBox.style.display = 'none';
@@ -211,6 +211,10 @@ $(document).ready(async() => {
             optionspanel.hideOptions();
         else if (tabName === 'analyses')
             dataSetModel.set('editingVar', null);
+        else if (tabName === 'annotation')
+            resultsView.hideWelcome();
+
+        instance.set('editState', tabName === 'annotation');
     });
 
     let halfWindowWidth = 585 + SplitPanelSection.sepWidth;
@@ -227,10 +231,14 @@ $(document).ready(async() => {
             let analysis = event.changed.selectedAnalysis;
             if (analysis !== null && typeof(analysis) !== 'string') {
                 analysis.ready.then(function() {
-                    splitPanel.setVisibility('main-options', true);
-                    optionspanel.setAnalysis(analysis);
-                    if (ribbonModel.get('selectedTab') === 'data')
-                        ribbonModel.set('selectedTab', 'analyses');
+                    if (analysis.hasUserOptions()) {
+                        splitPanel.setVisibility('main-options', true);
+                        optionspanel.setAnalysis(analysis);
+                        if (ribbonModel.get('selectedTab') === 'data')
+                            ribbonModel.set('selectedTab', 'analyses');
+                    }
+                    else
+                        optionspanel.hideOptions(false);
                 });
             }
             else {
@@ -298,6 +306,160 @@ $(document).ready(async() => {
     });
 
     let resultsView = new ResultsView({ el : '#results', iframeUrl : host.resultsViewUrl, model : instance });
+
+    resultsView.$el.on('annotationFocus', (event) => {
+        if (this._annotationReturnTab === undefined)
+            this._annotationReturnTab = null;
+
+        if (this._annotationReturnTab === null) {
+            let tab = ribbonModel.get('selectedTab');
+            if (tab !== 'annotation')
+                this._annotationReturnTab = tab;
+        }
+        ribbonModel.set('selectedTab', 'annotation');
+    });
+
+    resultsView.$el.on('annotationLostFocus', (event) => {
+        if (this._annotationReturnTab !== null) {
+            ribbonModel.set('selectedTab', this._annotationReturnTab);
+            this._annotationReturnTab = null;
+        }
+    });
+
+    resultsView.$el.on('analysisLostFocus', (event) => {
+        $(window).focus();
+        optionspanel.hideOptions();
+    });
+
+    resultsView.$el.on('activeFormatChanged', (event, data) => {
+        let annotationsTab = ribbonModel.getTab('annotation');
+        annotationsTab.clearValues();
+
+        let alignmentSet = false;
+
+        let formats = data.formats;
+
+        if (data.type === 'heading') {
+            ActionHub.get('textBold').set('enabled', false);
+            ActionHub.get('textUnderline').set('enabled', false);
+            ActionHub.get('textItalic').set('enabled', false);
+            ActionHub.get('textStrike').set('enabled', false);
+            ActionHub.get('textSubScript').set('enabled', false);
+            ActionHub.get('textSuperScript').set('enabled', false);
+            ActionHub.get('textCodeBlock').set('enabled', false);
+            ActionHub.get('textH2').set('enabled', false);
+            ActionHub.get('textListOrdered').set('enabled', false);
+            ActionHub.get('textListBullet').set('enabled', false);
+            ActionHub.get('textAlignCenter').set('enabled', false);
+            ActionHub.get('textAlignJustify').set('enabled', false);
+            ActionHub.get('textAlignRight').set('enabled', false);
+            ActionHub.get('textAlignLeft').set('enabled', false);
+            ActionHub.get('textLink').set('enabled', false);
+            ActionHub.get('textFormula').set('enabled', false);
+            ActionHub.get('textIndentLeft').set('enabled', false);
+            ActionHub.get('textIndentRight').set('enabled', false);
+            ActionHub.get('textColor').set('enabled', false);
+            ActionHub.get('textBackColor').set('enabled', false);
+
+            return;
+        }
+        else {
+            ActionHub.get('textBold').set('enabled', true);
+            ActionHub.get('textUnderline').set('enabled', true);
+            ActionHub.get('textItalic').set('enabled', true);
+            ActionHub.get('textStrike').set('enabled', true);
+            ActionHub.get('textSubScript').set('enabled', true);
+            ActionHub.get('textSuperScript').set('enabled', true);
+            ActionHub.get('textCodeBlock').set('enabled', true);
+            ActionHub.get('textH2').set('enabled', true);
+            ActionHub.get('textListOrdered').set('enabled', true);
+            ActionHub.get('textListBullet').set('enabled', true);
+            ActionHub.get('textAlignCenter').set('enabled', true);
+            ActionHub.get('textAlignJustify').set('enabled', true);
+            ActionHub.get('textAlignRight').set('enabled', true);
+            ActionHub.get('textAlignLeft').set('enabled', true);
+            ActionHub.get('textLink').set('enabled', true);
+            ActionHub.get('textFormula').set('enabled', true);
+            ActionHub.get('textIndentLeft').set('enabled', true);
+            ActionHub.get('textIndentRight').set('enabled', true);
+            ActionHub.get('textColor').set('enabled', true);
+            ActionHub.get('textBackColor').set('enabled', true);
+        }
+
+        let button = null;
+        for (let name in formats) {
+            switch (name) {
+                case 'bold':
+                    button = annotationsTab.getItem('textBold');
+                    button.setValue(formats[name]);
+                    break;
+                case 'underline':
+                    button = annotationsTab.getItem('textUnderline');
+                    button.setValue(formats[name]);
+                    break;
+                case 'italic':
+                    button = annotationsTab.getItem('textItalic');
+                    button.setValue(formats[name]);
+                    break;
+                case 'strike':
+                    button = annotationsTab.getItem('textStrike');
+                    button.setValue(formats[name]);
+                    break;
+                case 'script':
+                    if (formats[name] === 'sub') {
+                        button = annotationsTab.getItem('textSubScript');
+                        button.setValue(true);
+                    }
+                    else if (formats[name] === 'super') {
+                        button = annotationsTab.getItem('textSuperScript');
+                        button.setValue(true);
+                    }
+                    break;
+                case 'code-block':
+                    button = annotationsTab.getItem('textCodeBlock');
+                    button.setValue(formats[name]);
+                    break;
+                case 'header':
+                    if (formats[name] === 2) {
+                        button = annotationsTab.getItem('textH2');
+                        button.setValue(true);
+                    }
+                    break;
+                case 'list':
+                    if (formats[name] === 'ordered') {
+                        button = annotationsTab.getItem('textListOrdered');
+                        button.setValue(true);
+                    }
+                    else if (formats[name] === 'bullet') {
+                        button = annotationsTab.getItem('textListBullet');
+                        button.setValue(true);
+                    }
+                    break;
+                case 'align':
+                    alignmentSet = true;
+                    if (formats[name] === 'center') {
+                        button = annotationsTab.getItem('textAlignCenter');
+                        button.setValue(true);
+                    }
+                    else if (formats[name] === 'right') {
+                        button = annotationsTab.getItem('textAlignRight');
+                        button.setValue(true);
+                    }
+                    else if (formats[name] === 'justify') {
+                        button = annotationsTab.getItem('textAlignJustify');
+                        button.setValue(true);
+                    }
+                    break;
+            }
+
+        }
+
+        if (alignmentSet === false) {
+            button = annotationsTab.getItem('textAlignLeft');
+            button.setValue(true);
+        }
+    });
+
     let optionspanel = new OptionsPanel({ el : '#main-options', iframeUrl : host.analysisUIUrl, model : instance });
     optionspanel.setDataSetModel(dataSetModel);
     optionspanel.$el.on('splitpanel-hide', () =>  window.focus() );
@@ -443,7 +605,15 @@ $(document).ready(async() => {
         await new Promise((resolve, reject) => { /* never */ });
     }
 
-    if (instance.get('blank') && instance.analyses().count() === 0)
-        resultsView.showWelcome();
+    // if it's just the results heading ...
+    if (instance.analyses().count() === 1) {
+        for (let analysis of instance.analyses()) {
+            // ... and it's not edited
+            if (analysis.getHeading() || analysis.options.getAnnotation('topText'))
+                break;
+            // ... then show the welcome screen
+            resultsView.showWelcome();
+        }
+    }
 
 });

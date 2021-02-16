@@ -32,7 +32,7 @@ include_dirs = [
     path.join(tld, 'include') ]
 
 if os.name == 'nt':  # windows
-    libraries = [ "libboost_filesystem-vc140-mt-1_60", "libboost_system-vc140-mt-1_60" ]
+    libraries = [ "libboost_filesystem-vc141-mt-x64-1_74", "libboost_system-vc141-mt-x64-1_74", "shell32" ]
     library_dirs = [ tld + '/lib/libvc' ]
     extra_compile_args = ["/D", "UNICODE"]
     extra_link_args = [ ]
@@ -46,8 +46,8 @@ elif os.uname()[0] == "Linux":
 elif os.uname()[0] == "Darwin":
     libraries = [ "boost_filesystem", "boost_system" ]
     library_dirs = [ tld + '/../Frameworks' ]
-    extra_compile_args = [ '-mmacosx-version-min=10.11' ]
-    extra_link_args = [ "-framework", "Foundation", '-mmacosx-version-min=10.11' ]
+    extra_compile_args = [ '-mmacosx-version-min=10.13' ]
+    extra_link_args = [ "-framework", "Foundation", '-mmacosx-version-min=10.13' ]
 else:
     raise RuntimeError("Shouldn't get here!")
 

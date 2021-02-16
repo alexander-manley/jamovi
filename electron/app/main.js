@@ -93,7 +93,9 @@ const marshallArgs = function(args, wd, first) {
 
     let i = 0;
     while (i < args.length) {
-        if (['--no-sandbox'].includes(args[i]))
+        let arg = args[i]
+        if (arg.startsWith('--') && ! ['--version', '--r-version', '--install', '--debug'].includes(arg))
+            // strip the chromium switches
             args.splice(i, 1);
         else
             i++;
@@ -171,30 +173,11 @@ if (argvCmd.exit) {
     process.exit(0);
 }
 
-if (app.requestSingleInstanceLock) {
-    let firstInstance = app.requestSingleInstanceLock();
-    if ( ! firstInstance) {
-        app.quit();
-        process.exit(0);
-    }
-    else {
-        app.on('second-instance', (e, argv, wd) => {
-            argv.shift(); // remove exe
-            let cmd = marshallArgs(argv, wd);
-            handleCommand(cmd);
-        });
-    }
-}
-else {
-    let secondInstance = app.makeSingleInstance((argv, wd) => {
-        argv.shift(); // remove exe
-        let cmd = marshallArgs(argv, wd);
-        handleCommand(cmd);
-    });
-    if (secondInstance) {
-        app.quit();
-        process.exit(0);
-    }
+let firstInstance = app.requestSingleInstanceLock();
+if ( ! firstInstance) {
+    app.quit();
+    process.exit(0);
+    // second instance event handled lower down
 }
 
 // proxy servers can interfere with accessing localhost
@@ -423,8 +406,17 @@ if (os.platform() === 'win32') {
     });
 }
 
-Promise.all([ready, spawn]).then(() => {
+let completelyReady = Promise.all([ready, spawn]);
+
+completelyReady.then(() => {
     handleCommand(argvCmd);
+});
+
+app.on('second-instance', async(e, argv, wd) => {
+    await completelyReady;
+    argv.shift(); // remove exe
+    let cmd = marshallArgs(argv, wd);
+    handleCommand(cmd);
 });
 
 // handle requests sent from the browser instances
@@ -498,6 +490,7 @@ const createWindow = function(open) {
         icon: config.iconPath,
         webPreferences: {
             nodeIntegration: true,
+            enableRemoteModule: true,
         },
     });
 

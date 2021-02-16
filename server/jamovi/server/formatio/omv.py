@@ -23,7 +23,7 @@ def write(data, path, prog_cb, html=None, is_template=False):
         content = io.StringIO()
         content.write('Manifest-Version: 1.0\n')
         content.write('Data-Archive-Version: 1.0.2\n')
-        content.write('jamovi-Archive-Version: 8.0\n')
+        content.write('jamovi-Archive-Version: 9.0\n')
         content.write('Created-By: ' + str(app_info) + '\n')
         zip.writestr('META-INF/MANIFEST.MF', bytes(content.getvalue(), 'utf-8'), zipfile.ZIP_DEFLATED)
 
@@ -63,6 +63,7 @@ def write(data, path, prog_cb, html=None, is_template=False):
             field['formulaMessage'] = column.formula_message
             field['parentId'] = column.parent_id
             field['width'] = column.width
+
             if column.data_type == DataType.DECIMAL:
                 field['type'] = 'number'
             elif column.data_type == DataType.TEXT and column.measure_type == MeasureType.ID:
@@ -70,6 +71,14 @@ def write(data, path, prog_cb, html=None, is_template=False):
                 string_table_required = True
             else:
                 field['type'] = 'integer'
+
+            if column.column_type is ColumnType.OUTPUT:
+                field['outputAnalysisId'] = column.output_analysis_id
+                field['outputOptionName'] = column.output_option_name
+                field['outputName'] = column.output_name
+                field['outputDesiredColumnName'] = column.output_desired_column_name
+                field['outputAssignedColumnName'] = column.output_assigned_column_name
+
             field['importName'] = column.import_name
             field['description'] = column.description
             field['transform'] = column.transform
@@ -272,7 +281,7 @@ def read(data, path, prog_cb):
             raise Exception('File is corrupt (no JAV)')
 
         jav = (int(jav.group(1)), int(jav.group(2)))
-        if jav[0] > 8:
+        if jav[0] > 9:
             raise Exception('A newer version of jamovi is required')
 
         meta_content = zip.read('metadata.json').decode('utf-8')
@@ -363,6 +372,13 @@ def read(data, path, prog_cb):
             else:
                 column.trim_levels = meta_column.get('trimLevels', True)
                 column.width = meta_column.get('width', 100)
+
+            if column.column_type == ColumnType.OUTPUT:
+                column.output_analysis_id = meta_column.get('outputAnalysisId')
+                column.output_option_name = meta_column.get('outputOptionName')
+                column.output_name = meta_column.get('outputName')
+                column.output_desired_column_name = meta_column.get('outputDesiredColumnName')
+                column.output_assigned_column_name = meta_column.get('outputAssignedColumnName')
 
         row_count = meta_dataset['rowCount']
         data.row_tracker.removed_row_ranges = meta_dataset.get('removedRows', [])
