@@ -1,3 +1,4 @@
+![Splash](https://github.com/alexander-manley/jamovi/blob/master/database/jamovi.JPG)
 
 # jamovi
 
